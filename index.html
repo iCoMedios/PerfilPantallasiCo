@@ -244,21 +244,22 @@ height:55px;
         .photo img {
             width: 100%;
             height: 520px;
-            object-fit: cover;
+            object-fit: contain;
+            object-position: center;
+            display: block;
+            background: #EAF0F6;
         }
 
         .overlay {
-            position: absolute;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            padding: 35px;
-            background: linear-gradient(transparent, rgba(0, 0, 0, .85));
+            position: static;
+            padding: 20px 24px;
+            background: white;
+            border-top: 1px solid var(--border);
         }
 
         .overlay h2 {
-            color: white;
-            font-size: 31px;
+            color: var(--text);
+            font-size: 24px;
             font-weight: 700;
         }
 
@@ -336,6 +337,11 @@ height:55px;
             height: 280px !important;
         }
 
+        .demografia-aviso { grid-column: 1 / -1; padding: 32px; }
+        .demografia-aviso p { color: #586778; font-size: 14px; line-height: 1.6; }
+        .demografia-aviso strong { display: block; margin-bottom: 8px; color: var(--text); font-size: 18px; }
+        .demografia-aviso[hidden], #tarjetaGenero[hidden], #tarjetaEdad[hidden], canvas[hidden], .grafico-sin-datos[hidden] { display: none !important; }
+        .grafico-sin-datos { min-height: 280px; display: flex; align-items: center; justify-content: center; color: #586778; font-size: 14px; text-align: center; padding: 24px; }
         .footer {
             margin-top: 35px;
             text-align: center;
@@ -368,8 +374,11 @@ height:55px;
         .infoItem .help-button { top: 0; right: 0; width: 19px; height: 19px; font-size: 12px; }
         .help-button:focus-visible { outline: 3px solid #7EB8F5; outline-offset: 3px; }
         .help-tooltip { position: fixed; z-index: 1000; width: min(320px, calc(100vw - 24px)); padding: 14px 16px; background: #18314F; color: white; border-radius: 12px; box-shadow: 0 8px 24px #0003; font-size: 13px; line-height: 1.5; }
+        #reintentarDatos { margin: 0 0 20px; padding: 10px 16px; background: var(--ico-blue); color: white; border: 0; border-radius: 10px; cursor: pointer; font: inherit; }
+        #reintentarDatos[hidden] { display: none; }
         .help-tooltip[hidden] { display: none; }
         .value, .big-value { overflow-wrap: anywhere; }
+        .value.value-status { font-size: 28px; line-height: 1.25; color: #586778; }
         .infoItem strong { overflow-wrap: anywhere; }
         @media(max-width:600px) {
             .header { height: auto; min-height: 90px; padding: 18px; gap: 16px; }
@@ -403,6 +412,7 @@ height:55px;
         </div>
 
         <p id="estadoDatos" role="status" aria-live="polite">Cargando información…</p>
+        <button id="reintentarDatos" type="button" hidden>Volver a intentar</button>
         <div class="main">
             <!-- COLUMNA IZQUIERDA -->
             <div class="left">
@@ -504,13 +514,19 @@ height:55px;
                 </div>
 
                 <div class="demografia">
-                    <div class="card">
+                    <div id="demografiaNoDisponible" class="card demografia-aviso" role="note" hidden>
+                        <strong>Perfil demográfico no disponible</strong>
+                        <p id="motivoDemografia"></p>
+                    </div>
+                    <div class="card" id="tarjetaGenero">
                         <h3>Distribución por género</h3>
                         <canvas id="graficoGenero"></canvas>
+                        <p id="generoSinDatos" class="grafico-sin-datos" hidden>Distribución por género no disponible para este periodo.</p>
                     </div>
-                    <div class="card">
+                    <div class="card" id="tarjetaEdad">
                         <h3>Distribución por edades</h3>
                         <canvas id="graficoEdad"></canvas>
+                        <p id="edadSinDatos" class="grafico-sin-datos" hidden>Distribución por edades no disponible para este periodo.</p>
                     </div>
                     <div class="ai-card">
                         <h3><i class="fa-solid fa-wand-magic-sparkles"></i> MODO PLANNER</h3>
@@ -577,27 +593,99 @@ height:55px;
         const mesSelect = document.getElementById("mesSelect");
         const pantallaSelect = document.getElementById("pantallaSelect");
 
-        async function cargarDatos() {
+        const CLAVE_COPIA = 'ico-dashboard-v2:' + API_URL;
+        let cargandoDatos = false;
+        let avisoCopia = '';
+        function guardarCopia(payload) {
+            try { localStorage.setItem(CLAVE_COPIA, JSON.stringify({ fecha: Date.now(), payload })); } catch (error) { /* Almacenamiento opcional. */ }
+        }
+        function leerCopia() {
             try {
-                const response = await fetch(API_URL);
-                if (!response.ok) throw new Error('Error de carga: ' + response.status);
-                const payload = await response.json();
-                if (!Array.isArray(payload)) throw new Error('La API no devolvió una lista de registros.');
-                datos = payload.filter(x => x && typeof x === 'object').map(x => ({ ...x, _periodo: periodoDe(x.mes), _medio: medioDe(x.nombre) })).filter(x => x._periodo);
-                cargarAnios();
+                const copia = JSON.parse(localStorage.getItem(CLAVE_COPIA));
+                return copia && Number.isFinite(copia.fecha) && Array.isArray(copia.payload) ? copia : null;
+            } catch (error) { return null; }
+        }
+        function mostrarAvisoCopia() {
+            if (avisoCopia) document.getElementById('estadoDatos').textContent = avisoCopia + ' · ' + document.getElementById('estadoDatos').textContent;
+        }
+        async function solicitarDatosDashboard() {
+            const controller = new AbortController();
+            const temporizador = setTimeout(() => controller.abort(), 40000);
+            try {
+                const response = await fetch(API_URL, { signal: controller.signal });
+                if (!response.ok) {
+                    const error = new Error('El servidor respondió con HTTP ' + response.status + '.');
+                    error.reintentable = response.status >= 500 || response.status === 429;
+                    throw error;
+                }
+                let payload;
+                try { payload = await response.json(); }
+                catch (error) { throw new Error('El enlace del Apps Script no devolvió datos JSON. Revisa la implementación y sus permisos.'); }
+                if (payload && payload.error) throw new Error(payload.error);
+                if (!Array.isArray(payload)) throw new Error('El servidor no devolvió la lista de pantallas esperada.');
+                return payload;
+            } finally { clearTimeout(temporizador); }
+        }
+        function aplicarDatos(payload) {
+            datos = payload.filter(x => x && typeof x === 'object').map(x => ({ ...x, _periodo: periodoDe(x.mes), _medio: medioDe(x.nombre) })).filter(x => x._periodo);
+            cargarAnios();
+        }
+        async function cargarDatos() {
+            if (cargandoDatos) return;
+            cargandoDatos = true;
+            const boton = document.getElementById('reintentarDatos');
+            boton.disabled = true;
+            boton.hidden = true;
+            const copia = leerCopia();
+            if (copia && !datos.length) {
+                avisoCopia = 'Datos guardados el ' + new Date(copia.fecha).toLocaleString('es-CO') + '; buscando actualización';
+                aplicarDatos(copia.payload);
+            } else document.getElementById('estadoDatos').textContent = 'Cargando información…';
+            let payload;
+            try {
+                try { payload = await solicitarDatosDashboard(); }
+                catch (error) {
+                    if (!(error.name === 'AbortError' || error instanceof TypeError || error.reintentable)) throw error;
+                    document.getElementById('estadoDatos').textContent = 'La conexión está tardando. Reintentando una vez…';
+                    payload = await solicitarDatosDashboard();
+                }
             } catch (error) {
-                console.error(error);
-                datos = [];
-                [anioSelect, mesSelect, medioSelect, pantallaSelect].forEach(s => { s.replaceChildren(); s.disabled = true; });
-                limpiarDashboard();
-                document.getElementById('estadoDatos').textContent = 'No fue posible cargar la información. Recarga la página para volver a intentar.';
+                console.error('Carga dashboard:', error);
+                const detalle = error.name === 'AbortError' ? 'El servidor tardó demasiado en responder.' : (error instanceof TypeError ? 'No se pudo conectar con el enlace del Apps Script. Revisa la conexión y los permisos de la implementación.' : error.message);
+                if (copia) {
+                    avisoCopia = 'Sin actualizar: datos guardados el ' + new Date(copia.fecha).toLocaleString('es-CO');
+                    aplicarDatos(copia.payload);
+                    document.getElementById('estadoDatos').textContent += ' · ' + detalle;
+                } else {
+                    datos = [];
+                    [anioSelect, mesSelect, medioSelect, pantallaSelect].forEach(s => { s.replaceChildren(); s.disabled = true; });
+                    limpiarDashboard();
+                    document.getElementById('estadoDatos').textContent = detalle;
+                }
+                boton.hidden = false;
+                boton.disabled = false;
+                cargandoDatos = false;
+                return;
+            }
+            try {
+                avisoCopia = '';
+                guardarCopia(payload);
+                aplicarDatos(payload);
+            } catch (error) {
+                console.error('Presentación dashboard:', error);
+                document.getElementById('estadoDatos').textContent = 'Los datos llegaron, pero no se pudieron mostrar correctamente. Intenta volver a cargar.';
+                boton.hidden = false;
+            } finally {
+                boton.disabled = false;
+                cargandoDatos = false;
             }
         }
+
 
         // Catálogo por medio. Los nombres se comparan sin tildes ni el prefijo Est.
         const CATALOGO_MEDIOS = {
             'Centros comerciales': ['Nuestro Bogotá', 'Portobelo', 'Centro 93', 'Santa fe curva', 'Homesentry'],
-            'STM': ['Est. Ricaurte', 'Est. Toberín', 'Est. Alcalá', 'Est. Prado', 'Est. Pepe Sierra', 'Est. Calle 106', 'Est. Polo', 'Est. Virrey', 'Est. Calle 85', 'Est. Suba niza', 'Est. Suba calle 100', 'Est. 7 de agosto', 'Est. Restrepo', 'Est. Calle 146', 'Est. Boyacá', 'Est. Escuela militar', 'Est. Universidades', 'Est. General Santander', 'Est. San Mateo', 'Est. Terreros', 'Est. León XIII', 'Poblado B PG', 'Exposiciones MM', 'Berrio MM', 'Universidad MM', 'San Javier MM', 'San Antonio Tranvia MM', 'Envigado MM', 'Ayura MM', 'Acevedo Linea K', 'Bello PG', 'Acevedo Linea P MM', 'Sabaneta MM', 'Industriales Buses MM', 'Madera MM', 'Hospital MM', 'Floresta MM', 'Itagüí MM', 'Parque Berrio PG', 'San Antonio A Occidental', 'San Antonio A Vacio', 'Poblado A PG', 'La Estrella PG', 'Envigado PG', 'Estadio PG', 'Aguacatala PG', 'San Antonio B Plataforma', 'Industriales PG', 'Niquia Plataforma', 'San Javier PG', 'Niquia A PG', 'Caribe PG', 'Hospital PG'],
+            'STM': ['Est. Ricaurte', 'Est. Toberín', 'Est. Alcalá', 'Est. Prado', 'Est. Pepe Sierra', 'Est. Calle 106', 'Est. Polo', 'Est. Virrey', 'Est. Calle 85', 'Est. Suba niza', 'Est. Suba calle 100', 'Est. 7 de agosto', 'Est. Restrepo', 'Est. Calle 146', 'Est. Boyacá', 'Est. Escuela militar', 'Est. Universidades', 'Est. General Santander', 'Est. San Mateo', 'Est. Terreros', 'Est. León XIII', 'Poblado B PG', 'Exposiciones MM', 'Berrio MM', 'Universidad MM', 'San Javier MM', 'San Antonio Tranvia MM', 'Envigado MM', 'Ayura MM', 'Acevedo PG', 'Acevedo Linea K', 'Bello PG', 'Acevedo Linea P MM', 'Sabaneta MM', 'Industriales Buses MM', 'Madera MM', 'Hospital MM', 'Floresta MM', 'Itagüí MM', 'Parque Berrio PG', 'San Antonio A Occidental', 'San Antonio A Vacio', 'Poblado A PG', 'La Estrella PG', 'Envigado PG', 'Estadio PG', 'Aguacatala PG', 'San Antonio B Plataforma', 'Industriales PG', 'Niquia Plataforma', 'San Javier PG', 'Niquia A PG', 'Caribe PG', 'Hospital PG'],
             'Peajes': ['Peaje', 'UF3'],
             'Valla': ['Valla 106', 'Valla Boyaca']
         };
@@ -606,6 +694,21 @@ height:55px;
         }
         const MEDIO_POR_NOMBRE = new Map(Object.entries(CATALOGO_MEDIOS).flatMap(([medio, nombres]) => nombres.map(nombre => [normalizarNombre(nombre), medio])));
         function medioDe(nombre) { return MEDIO_POR_NOMBRE.get(normalizarNombre(nombre)) || 'Sin clasificar'; }
+        // Completar solo con pantallas confirmadas sin tránsito vehicular.
+        // Alternativamente, la API puede enviar vehicularAplica: false (booleano).
+        const PANTALLAS_SIN_TRANSITO_VEHICULAR = [];
+        function aplicaVehicular(registro) {
+            if (registro.vehicularAplica === false) return false;
+            if (registro.vehicularAplica === true) return true;
+            return !PANTALLAS_SIN_TRANSITO_VEHICULAR.some(nombre => normalizarNombre(nombre) === normalizarNombre(registro.nombre));
+        }
+        function mostrarMetricaVehicular(id, valor, aplica) {
+            const element = document.getElementById(id);
+            const numero = typeof valor === 'number' ? valor : (typeof valor === 'string' && valor.trim() !== '' ? Number(valor) : NaN);
+            const disponible = Number.isFinite(numero) && numero >= 0;
+            element.textContent = !aplica ? 'No aplica' : (disponible ? numero.toLocaleString('es-CO') : 'Sin datos');
+            element.classList.toggle('value-status', !aplica || !disponible);
+        }
         function periodoDe(valor) {
             const match = String(valor ?? '').trim().match(/^(\d{4})-(0[1-9]|1[0-2])(?:$|[-T\s])/);
             return match ? match[1] + '-' + match[2] : null;
@@ -652,10 +755,21 @@ height:55px;
             actualizarDashboard();
         }
         function limpiarDashboard() {
+            document.getElementById('demografiaNoDisponible').hidden = true;
+            ['tarjetaGenero', 'tarjetaEdad'].forEach(id => document.getElementById(id).hidden = false);
+            ctxGenero.hidden = true; ctxEdad.hidden = true;
+            document.getElementById('generoSinDatos').hidden = false;
+            document.getElementById('edadSinDatos').hidden = false;
+            ['vehiculos', 'conteo'].forEach(id => document.getElementById(id).classList.remove('value-status'));
             ['metros', 'pitch', 'nits', 'dimensiones', 'total', 'vehiculos', 'peatones', 'conteo', 'presencia', 'spots', 'cupos', 'diaAlcance', 'horarioAlcance'].forEach(id => document.getElementById(id).textContent = '—');
             document.getElementById('nombrePantalla').textContent = 'Sin datos';
             document.getElementById('fotoPantalla').removeAttribute('src');
             document.getElementById('aiResponse').style.display = 'none';
+            document.getElementById('demografiaNoDisponible').hidden = true;
+            ['tarjetaGenero', 'tarjetaEdad'].forEach(id => document.getElementById(id).hidden = false);
+            ctxGenero.hidden = true; ctxEdad.hidden = true;
+            document.getElementById('generoSinDatos').hidden = false;
+            document.getElementById('edadSinDatos').hidden = false;
             if (chartGenero) { chartGenero.destroy(); chartGenero = null; }
             if (chartEdad) { chartEdad.destroy(); chartEdad = null; }
         }
@@ -674,6 +788,7 @@ height:55px;
 
             document.getElementById("fotoPantalla").src = `https://raw.githubusercontent.com/DannaiCo/Pantallas-iCo-Medios/main/fotos/${nombreArchivo}.jpg`;
             
+            document.getElementById('fotoPantalla').alt = 'Pantalla ' + registro.nombre;
             // NOMBRE
             document.getElementById("nombrePantalla").textContent = registro.nombre;
 
@@ -683,27 +798,63 @@ height:55px;
             document.getElementById("nits").textContent = Number(registro.nits).toLocaleString() + " nits";
             document.getElementById("dimensiones").textContent = registro.dimensiones;
             document.getElementById("total").textContent = Number(registro.total).toLocaleString();
-            document.getElementById("vehiculos").textContent = Number(registro.vehiculos).toLocaleString();
+            mostrarMetricaVehicular("vehiculos", registro.vehiculos, aplicaVehicular(registro));
             document.getElementById("peatones").textContent = Number(registro.peatones).toLocaleString();
-            document.getElementById("conteo").textContent = Number(registro.conteoVehiculos).toLocaleString();
-            document.getElementById("presencia").textContent = (Number(registro.presencia) || 0).toLocaleString() + " s";
+            mostrarMetricaVehicular("conteo", registro.conteoVehiculos, aplicaVehicular(registro));
+            // Presencia llega de Quividi en décimas de segundo. Convertir una sola vez.
+            document.getElementById("presencia").textContent = formatearPresenciaSegundos(registro.presencia);
             document.getElementById("spots").textContent = Number(registro.spotsMensuales).toLocaleString() || "-";
             document.getElementById("cupos").textContent = registro.cuposPorPantalla || "-";
             document.getElementById("diaAlcance").innerText = registro.diaDeMayorAlcance || "-";
             document.getElementById("horarioAlcance").innerText = registro.horarioMayorAlcance || "-";
 
             actualizarGraficos(registro);
+            mostrarAvisoCopia();
         }
 
         //--------------------------------------------------
         // GRÁFICOS
         //--------------------------------------------------
+        function formatearPresenciaSegundos(valor) {
+            const texto = String(valor ?? '').trim();
+            const decimas = texto === '' ? NaN : Number(texto.replace(',', '.'));
+            if (!Number.isFinite(decimas) || decimas < 0) return 'Sin datos';
+            return (decimas / 10).toLocaleString('es-CO', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' s';
+        }
+
+        const PANTALLAS_SIN_PERFIL_DEMOGRAFICO = ['Nuestro Bogotá', 'Portobelo', 'Peaje', 'UF3', 'Valla 106', 'Valla Boyaca'].map(normalizarNombre);
+        function sinPerfilDemografico(registro) {
+            return registro.demografiaDisponible === false || PANTALLAS_SIN_PERFIL_DEMOGRAFICO.includes(normalizarNombre(registro.nombre)) || ['Peajes', 'Valla'].includes(registro._medio);
+        }
+        function distribucionDisponible(valores) {
+            return valores.every(valor => valor !== null && valor !== undefined && String(valor).trim() !== '' && Number.isFinite(Number(valor)) && Number(valor) >= 0 && Number(valor) <= 100) && valores.some(valor => Number(valor) > 0);
+        }
         function actualizarGraficos(registro) {
+            if (chartGenero) { chartGenero.destroy(); chartGenero = null; }
+            if (chartEdad) { chartEdad.destroy(); chartEdad = null; }
+            const excluida = sinPerfilDemografico(registro);
+            const generoDisponible = !excluida && distribucionDisponible([registro.hombres, registro.mujeres]);
+            const edadDisponible = !excluida && distribucionDisponible([registro.ninos, registro.jovenes, registro.adultos, registro.mayores]);
+            const avisoGeneral = excluida || (!generoDisponible && !edadDisponible);
+            document.getElementById('demografiaNoDisponible').hidden = !avisoGeneral;
+            document.getElementById('tarjetaGenero').hidden = avisoGeneral;
+            document.getElementById('tarjetaEdad').hidden = avisoGeneral;
+            ctxGenero.hidden = !generoDisponible; ctxEdad.hidden = !edadDisponible;
+            document.getElementById('generoSinDatos').hidden = generoDisponible;
+            document.getElementById('edadSinDatos').hidden = edadDisponible;
+            document.getElementById('motivoDemografia').textContent = excluida
+                ? 'La base de personas detectadas es insuficiente para presentar una distribución confiable de género y edad.'
+                : 'No hay información de género y edad disponible para el periodo seleccionado.';
+            if (avisoGeneral) return;
+            if (typeof Chart === 'undefined') {
+                document.getElementById('estadoDatos').textContent += ' · Los datos están disponibles; no se pudo cargar la librería de gráficos.';
+                return;
+            }
             // GÉNERO
             if (chartGenero) {
                 chartGenero.destroy();
             }
-            chartGenero = new Chart(ctxGenero, {
+            if (generoDisponible) chartGenero = new Chart(ctxGenero, {
                 type: "doughnut",
                 data: {
                     labels: ["Hombres", "Mujeres"],
@@ -738,7 +889,7 @@ height:55px;
             if (chartEdad) {
                 chartEdad.destroy();
             }
-            chartEdad = new Chart(ctxEdad, {
+            if (edadDisponible) chartEdad = new Chart(ctxEdad, {
                 type: "bar",
                 data: {
                     labels: ["1 a 15 años", "16 a 30 años", "31 a 65 años", "66+ años"],
@@ -784,20 +935,20 @@ height:55px;
                 // Definiciones suministradas por iCo Medios.
         const DEFINICIONES = {
           "total": "Total de oportunidades de exposición generadas por la pantalla durante el periodo seleccionado.",
-          "vehiculos": "Número estimado de personas dentro de los vehículos que pasaron frente a la pantalla. Quividi lo calcula a partir de los vehículos detectados y un factor medio de ocupación.",
+          "vehiculos": "Número estimado de personas dentro de los vehículos que pasaron frente a la pantalla.",
           "peatones": "Número de personas que pasaron frente a la pantalla y tuvieron la oportunidad de verla.",
-          "conteo": "Cantidad de vehículos detectados. No mide personas, mide autos, vans, buses, etc.",
-          "presencia": "Tiempo promedio de permanencia frente a la pantalla, combinando peatones y vehículos. Cuánto tiempo estuvo la audiencia expuesta a la pantalla en promedio.",
+          "conteo": "Cantidad de vehículos detectados frente a la pantalla.",
+          "presencia": "Tiempo promedio de permanencia frente a la pantalla, combinando peatones y vehículos.",
           "graficoGenero": "Distribución de la audiencia por género.",
-          "graficoEdad": "Distribución de la audiencia por grupo de edad. Rangos: 1 a 15 años, 16 a 30 años, 31 a 65 años y 66+ años.",
+          "graficoEdad": "Distribución de la audiencia por grupo de edad.",
           "metros": "Tamaño total disponible para mostrar contenido.",
-          "pitch": "Distancia entre píxeles, expresada en milímetros. Define el nivel de detalle y calidad de imagen.",
-          "nits": "Nivel de luminosidad de la pantalla, medido en nits, que permite una buena visibilidad en diferentes condiciones de luz.",
-          "dimensiones": "Cantidad de píxeles disponibles para mostrar el contenido con mayor definición y nitidez.",
-          "spots": "Número de veces que un anuncio se reproduce al mes al contratar un cupo completo.",
+          "pitch": "Distancia entre píxeles, expresada en milímetros.",
+          "nits": "Nivel de luminosidad de la pantalla, medido en nits.",
+          "dimensiones": "Cantidad de píxeles disponibles para mostrar el contenido.",
+          "spots": "Número de reproducciones mensuales de un anuncio al contratar un cupo completo.",
           "cupos": "Número máximo de anunciantes que pueden compartir la pantalla.",
-          "diaAlcance": "Día de la semana en el que la pantalla registra el mayor flujo de personas frente a ella.",
-          "horarioAlcance": "Franja horaria en la que la pantalla registra el mayor flujo de personas."
+          "diaAlcance": "Día de la semana con mayor flujo de personas frente a la pantalla.",
+          "horarioAlcance": "Franja horaria con mayor flujo de personas frente a la pantalla."
 };
         const tooltip = document.createElement('div');
         tooltip.id = 'ayudaDato'; tooltip.className = 'help-tooltip'; tooltip.setAttribute('role', 'tooltip'); tooltip.hidden = true;
@@ -836,6 +987,7 @@ height:55px;
         window.addEventListener('resize', cerrarAyuda);
         window.addEventListener('scroll', cerrarAyuda, true);
 
+        document.getElementById('reintentarDatos').addEventListener('click', cargarDatos);
         // Iniciar carga de datos al abrir
         cargarDatos();
     </script>
