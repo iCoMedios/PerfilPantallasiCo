@@ -61,6 +61,7 @@ box-shadow:0 4px 18px rgba(0,0,0,.05);
 
 }
     .ai-card {
+    position: relative;
     background: white;
     padding: 28px;
     border-radius: 22px;
@@ -73,6 +74,7 @@ box-shadow:0 4px 18px rgba(0,0,0,.05);
 }
 
 .ai-card h3 {
+    padding-right: 28px;
     font-size: 15px;
     font-weight: 700;
     color: var(--ico-blue);
@@ -342,6 +344,9 @@ height:55px;
         .demografia-aviso strong { display: block; margin-bottom: 8px; color: var(--text); font-size: 18px; }
         .demografia-aviso[hidden], #tarjetaGenero[hidden], #tarjetaEdad[hidden], canvas[hidden], .grafico-sin-datos[hidden] { display: none !important; }
         .grafico-sin-datos { min-height: 280px; display: flex; align-items: center; justify-content: center; color: #586778; font-size: 14px; text-align: center; padding: 24px; }
+        .actualizacion-discreta { display: block; width: fit-content; margin: 8px auto 0; font-size: 11px; color: #7B8794; cursor: help; }
+        .actualizacion-discreta[hidden] { display: none; }
+        .actualizacion-discreta:focus-visible { outline: 2px solid #7EB8F5; outline-offset: 3px; border-radius: 4px; }
         .footer {
             margin-top: 35px;
             text-align: center;
@@ -544,6 +549,7 @@ height:55px;
 
         <div class="footer">
             Fuente: Quividi · Dashboard desarrollado por iCo Medios
+            <span id="fechaConsulta" class="actualizacion-discreta" tabindex="0" hidden></span>
         </div>
     </div> <!-- Fin .container -->
 
@@ -596,6 +602,7 @@ height:55px;
         const CLAVE_COPIA = 'ico-dashboard-v2:' + API_URL;
         let cargandoDatos = false;
         let avisoCopia = '';
+        let fechaUltimaCarga = null;
         function guardarCopia(payload) {
             try { localStorage.setItem(CLAVE_COPIA, JSON.stringify({ fecha: Date.now(), payload })); } catch (error) { /* Almacenamiento opcional. */ }
         }
@@ -606,7 +613,16 @@ height:55px;
             } catch (error) { return null; }
         }
         function mostrarAvisoCopia() {
-            if (avisoCopia) document.getElementById('estadoDatos').textContent = avisoCopia + ' · ' + document.getElementById('estadoDatos').textContent;
+            const nota = document.getElementById('fechaConsulta');
+            nota.hidden = !fechaUltimaCarga;
+            if (!fechaUltimaCarga) return;
+            const fecha = new Date(fechaUltimaCarga);
+            nota.textContent = 'Última consulta: ' + fecha.toLocaleDateString('es-CO');
+            const detalle = 'Última carga correcta: ' + fecha.toLocaleString('es-CO') + '. ' + (avisoCopia
+                ? 'Se muestra la última copia disponible; la actualización está pendiente de confirmación.'
+                : 'Datos obtenidos en la última consulta correcta.');
+            nota.title = detalle;
+            nota.setAttribute('aria-label', detalle);
         }
         async function solicitarDatosDashboard() {
             const controller = new AbortController();
@@ -637,16 +653,17 @@ height:55px;
             boton.disabled = true;
             boton.hidden = true;
             const copia = leerCopia();
+            if (copia) fechaUltimaCarga = copia.fecha;
             if (copia && !datos.length) {
                 avisoCopia = 'Datos guardados el ' + new Date(copia.fecha).toLocaleString('es-CO') + '; buscando actualización';
                 aplicarDatos(copia.payload);
-            } else document.getElementById('estadoDatos').textContent = 'Cargando información…';
+            } else if (!datos.length) document.getElementById('estadoDatos').textContent = 'Cargando información…';
             let payload;
             try {
                 try { payload = await solicitarDatosDashboard(); }
                 catch (error) {
                     if (!(error.name === 'AbortError' || error instanceof TypeError || error.reintentable)) throw error;
-                    document.getElementById('estadoDatos').textContent = 'La conexión está tardando. Reintentando una vez…';
+                    if (!datos.length) document.getElementById('estadoDatos').textContent = 'La conexión está tardando. Reintentando una vez…';
                     payload = await solicitarDatosDashboard();
                 }
             } catch (error) {
@@ -655,13 +672,14 @@ height:55px;
                 if (copia) {
                     avisoCopia = 'Sin actualizar: datos guardados el ' + new Date(copia.fecha).toLocaleString('es-CO');
                     aplicarDatos(copia.payload);
-                    document.getElementById('estadoDatos').textContent += ' · ' + detalle;
+                    mostrarAvisoCopia();
                 } else {
                     datos = [];
                     [anioSelect, mesSelect, medioSelect, pantallaSelect].forEach(s => { s.replaceChildren(); s.disabled = true; });
                     limpiarDashboard();
                     document.getElementById('estadoDatos').textContent = detalle;
                 }
+                boton.textContent = copia ? 'Actualizar' : 'Volver a intentar';
                 boton.hidden = false;
                 boton.disabled = false;
                 cargandoDatos = false;
@@ -669,8 +687,10 @@ height:55px;
             }
             try {
                 avisoCopia = '';
+                fechaUltimaCarga = Date.now();
                 guardarCopia(payload);
                 aplicarDatos(payload);
+                mostrarAvisoCopia();
             } catch (error) {
                 console.error('Presentación dashboard:', error);
                 document.getElementById('estadoDatos').textContent = 'Los datos llegaron, pero no se pudieron mostrar correctamente. Intenta volver a cargar.';
@@ -684,11 +704,80 @@ height:55px;
 
         // Catálogo por medio. Los nombres se comparan sin tildes ni el prefijo Est.
         const CATALOGO_MEDIOS = {
-            'Centros comerciales': ['Nuestro Bogotá', 'Portobelo', 'Centro 93', 'Santa fe curva', 'Homesentry'],
-            'STM': ['Est. Ricaurte', 'Est. Toberín', 'Est. Alcalá', 'Est. Prado', 'Est. Pepe Sierra', 'Est. Calle 106', 'Est. Polo', 'Est. Virrey', 'Est. Calle 85', 'Est. Suba niza', 'Est. Suba calle 100', 'Est. 7 de agosto', 'Est. Restrepo', 'Est. Calle 146', 'Est. Boyacá', 'Est. Escuela militar', 'Est. Universidades', 'Est. General Santander', 'Est. San Mateo', 'Est. Terreros', 'Est. León XIII', 'Poblado B PG', 'Exposiciones MM', 'Berrio MM', 'Universidad MM', 'San Javier MM', 'San Antonio Tranvia MM', 'Envigado MM', 'Ayura MM', 'Acevedo PG', 'Acevedo Linea K', 'Bello PG', 'Acevedo Linea P MM', 'Sabaneta MM', 'Industriales Buses MM', 'Madera MM', 'Hospital MM', 'Floresta MM', 'Itagüí MM', 'Parque Berrio PG', 'San Antonio A Occidental', 'San Antonio A Vacio', 'Poblado A PG', 'La Estrella PG', 'Envigado PG', 'Estadio PG', 'Aguacatala PG', 'San Antonio B Plataforma', 'Industriales PG', 'Niquia Plataforma', 'San Javier PG', 'Niquia A PG', 'Caribe PG', 'Hospital PG'],
-            'Peajes': ['Peaje', 'UF3'],
-            'Valla': ['Valla 106', 'Valla Boyaca']
-        };
+          "Centros comerciales": [
+                    "Nuestro Bogotá",
+                    "Portobelo",
+                    "Centro 93",
+                    "Santa fe curva",
+                    "Homesentry"
+          ],
+          "Transmilenio": [
+                    "Est. Ricaurte",
+                    "Est. Toberín",
+                    "Est. Alcalá",
+                    "Est. Prado",
+                    "Est. Pepe Sierra",
+                    "Est. Calle 106",
+                    "Est. Polo",
+                    "Est. Virrey",
+                    "Est. Calle 85",
+                    "Est. Suba niza",
+                    "Est. Suba calle 100",
+                    "Est. 7 de agosto",
+                    "Est. Restrepo",
+                    "Est. Calle 146",
+                    "Est. Boyacá",
+                    "Est. Escuela militar",
+                    "Est. Universidades",
+                    "Est. General Santander",
+                    "Est. San Mateo",
+                    "Est. Terreros",
+                    "Est. León XIII"
+          ],
+          "Metro": [
+                    "Poblado B PG",
+                    "Exposiciones MM",
+                    "Berrio MM",
+                    "Universidad MM",
+                    "San Javier MM",
+                    "San Antonio Tranvia MM",
+                    "Envigado MM",
+                    "Ayura MM",
+                    "Acevedo PG",
+                    "Acevedo Linea K",
+                    "Bello PG",
+                    "Acevedo Linea P MM",
+                    "Sabaneta MM",
+                    "Industriales Buses MM",
+                    "Madera MM",
+                    "Hospital MM",
+                    "Floresta MM",
+                    "Itagüí MM",
+                    "Parque Berrio PG",
+                    "San Antonio A Occidental",
+                    "San Antonio A Vacio",
+                    "Poblado A PG",
+                    "La Estrella PG",
+                    "Envigado PG",
+                    "Estadio PG",
+                    "Aguacatala PG",
+                    "San Antonio B Plataforma",
+                    "Industriales PG",
+                    "Niquia Plataforma",
+                    "San Javier PG",
+                    "Niquia A PG",
+                    "Caribe PG",
+                    "Hospital PG"
+          ],
+          "Peajes": [
+                    "Peaje",
+                    "UF3"
+          ],
+          "Valla": [
+                    "Valla 106",
+                    "Valla Boyaca"
+          ]
+};
         function normalizarNombre(nombre) {
             return String(nombre ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/^est\.?\s+/, '').replace(/\s+/g, ' ');
         }
@@ -822,12 +911,16 @@ height:55px;
             return (decimas / 10).toLocaleString('es-CO', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' s';
         }
 
-        const PANTALLAS_SIN_PERFIL_DEMOGRAFICO = ['Nuestro Bogotá', 'Portobelo', 'Peaje', 'UF3', 'Valla 106', 'Valla Boyaca'].map(normalizarNombre);
+        const PANTALLAS_SIN_PERFIL_DEMOGRAFICO = ['Nuestro Bogotá', 'Peaje', 'UF3', 'Valla 106', 'Valla Boyaca'].map(normalizarNombre);
         function sinPerfilDemografico(registro) {
             return registro.demografiaDisponible === false || PANTALLAS_SIN_PERFIL_DEMOGRAFICO.includes(normalizarNombre(registro.nombre)) || ['Peajes', 'Valla'].includes(registro._medio);
         }
         function distribucionDisponible(valores) {
             return valores.every(valor => valor !== null && valor !== undefined && String(valor).trim() !== '' && Number.isFinite(Number(valor)) && Number(valor) >= 0 && Number(valor) <= 100) && valores.some(valor => Number(valor) > 0);
+        }
+        function tooltipPorcentaje(contexto) {
+            const porcentaje = Number(contexto.raw).toLocaleString('es-CO', { maximumFractionDigits: 2 });
+            return contexto.label + ': ' + porcentaje + '%';
         }
         function actualizarGraficos(registro) {
             if (chartGenero) { chartGenero.destroy(); chartGenero = null; }
@@ -869,6 +962,12 @@ height:55px;
                     responsive: true,
                     cutout: "72%",
                     plugins: {
+                        tooltip: {
+                            callbacks: {
+                                title: () => '',
+                                label: tooltipPorcentaje
+                            }
+                        },
                         legend: {
                             position: "bottom",
                             labels: {
@@ -909,6 +1008,12 @@ height:55px;
                 options: {
                     responsive: true,
                     plugins: {
+                        tooltip: {
+                            callbacks: {
+                                title: () => '',
+                                label: tooltipPorcentaje
+                            }
+                        },
                         legend: {
                             display: false
                         }
@@ -934,6 +1039,7 @@ height:55px;
 
                 // Definiciones suministradas por iCo Medios.
         const DEFINICIONES = {
+            "aiInput": "Encuentra las pantallas más afines al público objetivo y al contexto de tu campaña.",
           "total": "Total de oportunidades de exposición generadas por la pantalla durante el periodo seleccionado.",
           "vehiculos": "Número estimado de personas dentro de los vehículos que pasaron frente a la pantalla.",
           "peatones": "Número de personas que pasaron frente a la pantalla y tuvieron la oportunidad de verla.",
@@ -969,7 +1075,7 @@ height:55px;
         }
         Object.entries(DEFINICIONES).forEach(([id, texto]) => {
             const target = document.getElementById(id);
-            const contenedor = target.closest('.infoItem, .card, .big-card');
+            const contenedor = target.closest('.infoItem, .card, .big-card, .ai-card');
             const titulo = contenedor.querySelector('h3, span').textContent;
             const button = document.createElement('button');
             button.type = 'button'; button.className = 'help-button'; button.textContent = '!';
