@@ -951,7 +951,7 @@ height:55px;
             document.getElementById('generoSinDatos').hidden = generoDisponible;
             document.getElementById('edadSinDatos').hidden = edadDisponible;
             document.getElementById('motivoDemografia').textContent = excluida
-                ? 'La base de personas detectadas es insuficiente para presentar una distribución confiable de género y edad.'
+                ? 'Por la naturaleza vehicular de este elemento, el perfil demográfico no se encuentra disponible.'
                 : 'No hay información de género y edad disponible para el periodo seleccionado.';
             if (avisoGeneral) return;
             if (typeof Chart === 'undefined') {
@@ -1166,7 +1166,7 @@ function capturarFichaPdf() {
         edades: !excluida && distribucionDisponible([registro.ninos, registro.jovenes, registro.adultos, registro.mayores])
             ? [Number(registro.ninos), Number(registro.jovenes), Number(registro.adultos), Number(registro.mayores)] : null,
         motivoDemografia: excluida
-            ? 'La base de personas detectadas es insuficiente para presentar una distribución confiable de género y edad.'
+            ? 'Por la naturaleza vehicular de este elemento, el perfil demográfico no se encuentra disponible.'
             : 'No hay información de género y edad disponible para el periodo seleccionado.',
         emitida: new Date().toLocaleDateString('es-CO', { timeZone: 'America/Bogota' })
     };
